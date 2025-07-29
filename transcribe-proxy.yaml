@@ -1,0 +1,70 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: EC2 instance with Elastic IP (no SSL, no ALB, DNS handled externally)
+
+Parameters:
+  DomainName:
+    Type: String
+    Description: FQDN to assign (e.g., transcribe.yourdomain.com)
+  HostedZoneName:
+    Type: String
+    Description: Hosted Zone Name (e.g., yourdomain.com.)
+
+Resources:
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP, WebSocket (8080), SSH
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  TranscribeProxyInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: ami-08a6efd148b1f7504 # Amazon Linux 2
+      SecurityGroupIds:
+        - !Ref InstanceSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          yum update -y
+          curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+          yum install -y nodejs git
+          mkdir -p /home/ec2-user/app
+          git clone https://github.com/MUNIF-2242/kriyabot-transcribe-proxy.git /home/ec2-user/app
+          cd /home/ec2-user/app
+          npm install
+          nohup node server.js > app.log 2>&1 &
+
+  ElasticIP:
+    Type: AWS::EC2::EIP
+
+  EIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref TranscribeProxyInstance
+      EIP: !Ref ElasticIP
+
+Outputs:
+  ElasticIP:
+    Description: Elastic IP assigned to EC2 instance
+    Value: !Ref ElasticIP
+
+  AppURL:
+    Description: App endpoint (http)
+    Value: !Sub "http://${DomainName}"
+
+  WebSocketURL:
+    Description: WebSocket endpoint (ws)
+    Value: !Sub "ws://${DomainName}"
