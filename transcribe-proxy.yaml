@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: EC2 instance with Elastic IP (no SSL, no ALB, DNS handled externally)
+Description: EC2 instance with Elastic IP and access to Transcribe via IAM Role
 
 Parameters:
   DomainName:
@@ -28,11 +28,34 @@ Resources:
           ToPort: 22
           CidrIp: 0.0.0.0/0
 
+  TranscribeInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonTranscribeFullAccess
+        - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess # Optional: for logging
+
+  TranscribeInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+        - !Ref TranscribeInstanceRole
+
   TranscribeProxyInstance:
     Type: AWS::EC2::Instance
     Properties:
       InstanceType: t2.micro
       ImageId: ami-08a6efd148b1f7504 # Amazon Linux 2
+      IamInstanceProfile: !Ref TranscribeInstanceProfile
       SecurityGroupIds:
         - !Ref InstanceSecurityGroup
       UserData:
