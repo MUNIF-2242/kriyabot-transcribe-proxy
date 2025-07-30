@@ -62,18 +62,15 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           yum update -y
-          # Install dependencies
           curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
           yum install -y nodejs git nginx certbot python3-certbot-nginx
 
-          # Clone your app
           mkdir -p /home/ec2-user/app
           cd /home/ec2-user
           git clone -b prod https://github.com/MUNIF-2242/kriyabot-transcribe-proxy.git app
           cd app
           npm install
 
-          # Configure Nginx for your domain
           cat > /etc/nginx/conf.d/${DomainName}.conf << EOF
           server {
               listen 80;
@@ -93,10 +90,24 @@ Resources:
           systemctl enable nginx
           systemctl start nginx
 
-          # Request Let's Encrypt certificate
           certbot certonly --webroot -w /var/www/certbot -d ${DomainName} --non-interactive --agree-tos --email admin@${DomainName}
 
-          # Update Nginx to proxy to Node.js over HTTPS
+          # Wait for certbot certificate files up to 5 minutes (60 attempts * 5 seconds)
+          for i in {1..60}; do
+            if [ -f "/etc/letsencrypt/live/${DomainName}/fullchain.pem" ] && [ -f "/etc/letsencrypt/live/${DomainName}/privkey.pem" ]; then
+              echo "✅ SSL certificate found!"
+              break
+            else
+              echo "⏳ Waiting for certificate to be generated... ($i/60)"
+              sleep 5
+            fi
+
+            if [ "$i" -eq 60 ]; then
+              echo "❌ Certificate not found after waiting. Exiting." >> /var/log/certbot-wait-error.log
+              exit 1
+            fi
+          done
+
           cat > /etc/nginx/conf.d/${DomainName}.conf << EOF
           server {
               listen 443 ssl;
@@ -122,11 +133,29 @@ Resources:
           }
           EOF
 
-          # Reload Nginx with HTTPS config
           systemctl reload nginx
 
-          # Start your Node.js app (listening on localhost:3000)
-          nohup node /home/ec2-user/app/server.js > /home/ec2-user/app/app.log 2>&1 &
+          # Create systemd service to auto-start Node.js server
+          cat > /etc/systemd/system/transcribe.service << EOF
+          [Unit]
+          Description=KriyaBot Transcribe Server
+          After=network.target
+
+          [Service]
+          ExecStart=/usr/bin/node /home/ec2-user/app/server.js
+          Restart=always
+          User=ec2-user
+          Environment=NODE_ENV=production
+          WorkingDirectory=/home/ec2-user/app
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          systemctl daemon-reexec
+          systemctl daemon-reload
+          systemctl enable transcribe
+          systemctl start transcribe
 
   ElasticIP:
     Type: AWS::EC2::EIP
