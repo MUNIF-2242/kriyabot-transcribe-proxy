@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: EC2 instance with Elastic IP and access to Transcribe via IAM Role
+Description: EC2 instance with Elastic IP, Let's Encrypt SSL, and access to Transcribe via IAM Role
 
 Parameters:
   DomainName:
@@ -13,19 +13,15 @@ Resources:
   InstanceSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow HTTP, HTTPS, WebSocket (8080), SSH
+      GroupDescription: Allow HTTP, HTTPS, WebSocket (443), SSH
       SecurityGroupIngress:
         - IpProtocol: tcp
-          FromPort: 8080
-          ToPort: 8080
+          FromPort: 443
+          ToPort: 443
           CidrIp: 0.0.0.0/0
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
-          CidrIp: 0.0.0.0/0
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
           CidrIp: 0.0.0.0/0
         - IpProtocol: tcp
           FromPort: 22
@@ -66,14 +62,71 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           yum update -y
+          # Install dependencies
           curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-          yum install -y nodejs git
+          yum install -y nodejs git nginx certbot python3-certbot-nginx
+
+          # Clone your app
           mkdir -p /home/ec2-user/app
           cd /home/ec2-user
           git clone -b prod https://github.com/MUNIF-2242/kriyabot-transcribe-proxy.git app
           cd app
           npm install
-          nohup node server.js > app.log 2>&1 &
+
+          # Configure Nginx for your domain
+          cat > /etc/nginx/conf.d/${DomainName}.conf << EOF
+          server {
+              listen 80;
+              server_name ${DomainName};
+
+              location /.well-known/acme-challenge/ {
+                  root /var/www/certbot;
+              }
+
+              location / {
+                  return 301 https://\$host\$request_uri;
+              }
+          }
+          EOF
+
+          mkdir -p /var/www/certbot
+          systemctl enable nginx
+          systemctl start nginx
+
+          # Request Let's Encrypt certificate
+          certbot certonly --webroot -w /var/www/certbot -d ${DomainName} --non-interactive --agree-tos --email admin@${DomainName}
+
+          # Update Nginx to proxy to Node.js over HTTPS
+          cat > /etc/nginx/conf.d/${DomainName}.conf << EOF
+          server {
+              listen 443 ssl;
+              server_name ${DomainName};
+
+              ssl_certificate /etc/letsencrypt/live/${DomainName}/fullchain.pem;
+              ssl_certificate_key /etc/letsencrypt/live/${DomainName}/privkey.pem;
+
+              location / {
+                  proxy_pass http://127.0.0.1:3000;
+                  proxy_http_version 1.1;
+                  proxy_set_header Upgrade \$http_upgrade;
+                  proxy_set_header Connection 'upgrade';
+                  proxy_set_header Host \$host;
+                  proxy_cache_bypass \$http_upgrade;
+              }
+          }
+
+          server {
+              listen 80;
+              server_name ${DomainName};
+              return 301 https://\$host\$request_uri;
+          }
+          EOF
+
+          # Reload Nginx with HTTPS config
+          systemctl reload nginx
+
+          # Start your Node.js app (listening on localhost:3000)
+          nohup node /home/ec2-user/app/server.js > /home/ec2-user/app/app.log 2>&1 &
 
   ElasticIP:
     Type: AWS::EC2::EIP
@@ -90,9 +143,9 @@ Outputs:
     Value: !Ref ElasticIP
 
   AppURL:
-    Description: App endpoint (http)
+    Description: App endpoint (HTTPS)
     Value: !Sub "https://${DomainName}"
 
   WebSocketURL:
-    Description: WebSocket endpoint (ws)
+    Description: WebSocket endpoint (WSS)
     Value: !Sub "wss://${DomainName}"
