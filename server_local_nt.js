@@ -1,38 +1,28 @@
-import fs from "fs";
-import https from "https";
+import http from "http";
 import { WebSocketServer } from "ws";
-import { PassThrough } from "stream";
-import {
-  TranscribeStreamingClient,
-  StartStreamTranscriptionCommand,
-} from "@aws-sdk/client-transcribe-streaming";
+// Uncomment these lines when ready to enable live transcription
+// import { PassThrough } from "stream";
+// import {
+//   TranscribeStreamingClient,
+//   StartStreamTranscriptionCommand,
+// } from "@aws-sdk/client-transcribe-streaming";
 
-const REGION = "us-east-1";
-const PORT = 443;
-const SAMPLE_RATE = 16000;
+// const REGION = "us-east-1";
+// const SAMPLE_RATE = 16000;
+// const transcribeClient = new TranscribeStreamingClient({ region: REGION });
 
-const transcribeClient = new TranscribeStreamingClient({ region: REGION });
-
-const server = https.createServer(
-  {
-    cert: fs.readFileSync(
-      "/etc/letsencrypt/live/transcribe.shellbeehaken.click/fullchain.pem"
-    ),
-    key: fs.readFileSync(
-      "/etc/letsencrypt/live/transcribe.shellbeehaken.click/privkey.pem"
-    ),
-  },
-  (req, res) => {
-    res.writeHead(200);
-    res.end("🔒 Secure WebSocket Server is running");
-  }
-);
-
+const PORT = 8080;
+const server = http.createServer();
 const wss = new WebSocketServer({ server });
 
 wss.on("connection", (ws) => {
   console.log("✅ Client connected");
 
+  // Simulate a dummy transcript message to test frontend UI
+  ws.send(JSON.stringify({ transcript: "🧠 What is kriyakarak?" }));
+
+  // Placeholder for AWS Transcribe streaming logic
+  /*
   const audioStream = new PassThrough();
 
   const command = new StartStreamTranscriptionCommand({
@@ -46,60 +36,46 @@ wss.on("connection", (ws) => {
     })(),
   });
 
-  let isClosed = false;
-
-  const sendTranscribe = async () => {
+  transcribeClient.send(command).then(async (response) => {
     try {
-      const response = await transcribeClient.send(command);
-
       for await (const event of response.TranscriptResultStream) {
         const results = event.TranscriptEvent?.Transcript?.Results;
         if (
-          results &&
-          results.length > 0 &&
+          results?.length &&
           !results[0].IsPartial &&
           results[0].Alternatives?.[0]?.Transcript
         ) {
           const transcript = results[0].Alternatives[0].Transcript;
           console.log("📝 Transcript:", transcript);
-
           if (ws.readyState === ws.OPEN) {
             ws.send(JSON.stringify({ transcript }));
           }
         }
       }
-    } catch (error) {
-      console.error("❌ Transcribe error:", error);
-      if (!isClosed) ws.close();
+    } catch (err) {
+      console.error("❌ Transcribe error:", err);
+      ws.close();
     }
-  };
-
-  sendTranscribe();
+  });
 
   ws.on("message", (message) => {
     if (Buffer.isBuffer(message)) {
       audioStream.write(message);
-    } else {
-      console.warn("⚠️ Non-buffer message received");
     }
   });
+  */
 
   ws.on("close", () => {
-    isClosed = true;
     console.log("🔌 Client disconnected");
-    audioStream.end();
+    // if (audioStream) audioStream.end();
   });
 
   ws.on("error", (err) => {
-    isClosed = true;
     console.error("💥 WebSocket error:", err);
     ws.close();
-    audioStream.end();
   });
 });
 
 server.listen(PORT, () => {
-  console.log(
-    `🚀 Secure WebSocket Server listening at https://yourdomain.com:${PORT}`
-  );
+  console.log(`🚀 Mock server running at http://localhost:${PORT}`);
 });
